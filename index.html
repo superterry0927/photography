@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>攝影服務隊任務報名系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Firebase SDKs (Compat version for stability in simple HTML) -->
+    <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore-compat.js"></script>
+
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f3f4f6; }
+        .modal-overlay { background-color: rgba(0, 0, 0, 0.5); }
+        .fade-in { animation: fadeIn 0.2s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // ---------------------------------------------------------
+        // Firebase Setup (Compat / V8 Style)
+        // ---------------------------------------------------------
+        
+        // ★★★ 請在此處填入您自己的 Firebase 設定 (正式佈署用) ★★★
+        const myFirebaseConfig = {
+            apiKey: "AIzaSyDwHPn29EWCd4IsRRG_aNEOCFw11rid8aA",
+            authDomain: "photo-team-mission.firebaseapp.com",
+            projectId: "photo-team-mission",
+            storageBucket: "photo-team-mission.firebasestorage.app",
+            messagingSenderId: "912652635116",
+            appId: "1:912652635116:web:d3ff0e61ad3bea5e4d8ec9",
+            measurementId: "G-MT8NQTQCMH"
+        };
+
+        let firebaseConfig;
+        let appId = 'photo-team-app'; 
+
+        if (typeof myFirebaseConfig !== 'undefined' && myFirebaseConfig && myFirebaseConfig.apiKey) {
+            firebaseConfig = myFirebaseConfig;
+            appId = myFirebaseConfig.projectId; 
+        } else if (typeof __firebase_config !== 'undefined') {
+            firebaseConfig = JSON.parse(__firebase_config);
+            if (typeof __app_id !== 'undefined') appId = __app_id;
+        } else {
+            console.error("找不到 Firebase 設定");
+            alert("系統錯誤：未設定 Firebase 資料庫連線，請聯繫管理員。");
+        }
+        
+        if (firebaseConfig && !firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        // ---------------------------------------------------------
+        // Database Helpers
+        // ---------------------------------------------------------
+        const isCustomConfig = !!(typeof myFirebaseConfig !== 'undefined' && myFirebaseConfig && myFirebaseConfig.apiKey);
+
+        const getCollectionRef = (colName) => {
+            if (isCustomConfig) return db.collection(colName);
+            return db.collection('artifacts').doc(appId).collection('public').doc('data').collection(colName);
+        };
+        
+        const getSettingsDocRef = () => {
+             if (isCustomConfig) return db.collection('settings').doc('general');
+             return db.collection('artifacts').doc(appId).collection('public').doc('data').collection('settings').doc('general');
+        };
+
+        // ---------------------------------------------------------
+        // Utilities
+        // ---------------------------------------------------------
+        const maskName = (name) => {
+            if (!name || name.length < 2) return name;
+            return name.substring(0, 1) + 'O' + name.substring(2);
+        };
+
+        const formatDate = (dateStr) => {
+            if(!dateStr) return '';
+            const d = new Date(dateStr);
+            const days = ['日', '一', '二', '三', '四', '五', '六'];
+            return `${d.getMonth() + 1}/${d.getDate()} (${days[d.getDay()]})`;
+        };
+        
+        const formatTimeRange = (start, end, fallback) => {
+            if (start && end) return `${start} ~ ${end}`;
+            if (start) return `${start} 開始`;
+            return fallback || '';
+        };
+
+        // ---------------------------------------------------------
+        // Components
+        // ---------------------------------------------------------
+        const ConfirmModal = ({ isOpen, title, message, onConfirm, onCancel }) => {
+            if (!isOpen) return null;
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100] modal-overlay">
+                    <div className="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full mx-4 fade-in">
+                        <h3 className="text-lg font-bold mb-2 text-slate-800">{title}</h3>
+                        <p className="text-gray-600 mb-6 text-sm whitespace-pre-wrap">{message}</p>
+                        <div className="flex justify-end gap-3">
+                            <button onClick={onCancel} className="px-4 py-2 border rounded text-gray-600 hover:bg-gray-50 transition">取消</button>
+                            <button onClick={onConfirm} className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 shadow transition">確定</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 1. App Component (Main Container)
+        const App = () => {
+            const [user, setUser] = React.useState(null);
+            const [missions, setMissions] = React.useState([]);
+            const [registrations, setRegistrations] = React.useState([]);
+            const [view, setView] = React.useState('monthly-list'); 
+            const [selectedMission, setSelectedMission] = React.useState(null);
+            const [systemSettings, setSystemSettings] = React.useState({ adminPassword: 'admin' });
+            const [confirmData, setConfirmData] = React.useState({ isOpen: false, title: '', message: '', onConfirm: null });
+
+            const showConfirm = (title, message, onConfirm) => {
+                setConfirmData({
+                    isOpen: true, title, message,
+                    onConfirm: async () => { await onConfirm(); setConfirmData(prev => ({ ...prev, isOpen: false })); }
+                });
+            };
+
+            const closeConfirm = () => setConfirmData(prev => ({ ...prev, isOpen: false }));
+            
+            React.useEffect(() => {
+                const initAuth = async () => {
+                    if (!isCustomConfig && typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await auth.signInWithCustomToken(__initial_auth_token);
+                    } else {
+                        await auth.signInAnonymously().catch(error => console.error("登入失敗:", error));
+                    }
+                };
+                initAuth();
+                const unsubscribe = auth.onAuthStateChanged(setUser);
+                return () => unsubscribe();
+            }, []);
+
+            React.useEffect(() => {
+                if (!user) return;
+                const unsubMissions = getCollectionRef('missions').onSnapshot((snapshot) => {
+                    setMissions(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+                }, (err) => console.error("Missions error", err));
+
+                const unsubRegs = getCollectionRef('registrations').onSnapshot((snapshot) => {
+                    setRegistrations(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+                }, (err) => console.error("Registrations error", err));
+
+                const settingsRef = getSettingsDocRef();
+                const unsubSettings = settingsRef.onSnapshot((docSnap) => {
+                    if (docSnap.exists) setSystemSettings(docSnap.data());
+                    else settingsRef.set({ adminPassword: 'admin' });
+                }, (err) => console.error("Settings error", err));
+
+                return () => { unsubMissions(); unsubRegs(); unsubSettings(); };
+            }, [user]);
+
+            const handleMissionClick = (mission) => {
+                setSelectedMission(mission);
+                setView('mission-detail');
+            };
+
+            const goHome = () => {
+                setView('monthly-list');
+                setSelectedMission(null);
+            };
+
+            return (
+                <div className="min-h-screen flex flex-col">
+                    <ConfirmModal isOpen={confirmData.isOpen} title={confirmData.title} message={confirmData.message} onConfirm={confirmData.onConfirm} onCancel={closeConfirm} />
+
+                    <header className="bg-slate-800 text-white p-4 shadow-md flex justify-between items-center sticky top-0 z-50">
+                        <div className="flex items-center gap-3 cursor-pointer" onClick={goHome}>
+                            <i className="fas fa-camera-retro text-2xl text-yellow-400"></i>
+                            <h1 className="text-xl font-bold">攝影服務隊任務報名系統</h1>
+                        </div>
+                        <div>
+                            {view === 'admin' ? (
+                                <button onClick={goHome} className="bg-slate-600 hover:bg-slate-500 px-3 py-1 rounded text-sm transition">
+                                    <i className="fas fa-home mr-1"></i> 回首頁
+                                </button>
+                            ) : (
+                                <button onClick={() => setView('admin')} className="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-sm transition">
+                                    <i className="fas fa-cog mr-1"></i> 管理員
+                                </button>
+                            )}
+                        </div>
+                    </header>
+
+                    <main className="flex-grow container mx-auto p-2 md:p-6">
+                        {view === 'monthly-list' && (
+                            <MonthlyListView missions={missions} registrations={registrations} onMissionClick={handleMissionClick} />
+                        )}
+                        {view === 'mission-detail' && selectedMission && (
+                            <MissionDetail mission={selectedMission} registrations={registrations.filter(r => r.missionId === selectedMission.id)} onBack={goHome} showConfirm={showConfirm} />
+                        )}
+                        {view === 'admin' && (
+                            <AdminDashboard systemSettings={systemSettings} missions={missions} registrations={registrations} onLogout={goHome} showConfirm={showConfirm} />
+                        )}
+                    </main>
+
+                    <footer className="bg-slate-200 text-slate-600 text-center p-3 text-sm">
+                        &copy; {new Date().getFullYear()} 攝影服務隊 | 系統自動維護中
+                    </footer>
+                </div>
+            );
+        };
+
+        // 2. Monthly List View (Horizontal Rows)
+        const MonthlyListView = ({ missions, registrations, onMissionClick }) => {
+            const [currentDate, setCurrentDate] = React.useState(new Date());
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth() + 1;
+            const todayStr = new Date().toISOString().split('T')[0];
+
+            const changeMonth = (offset) => {
+                setCurrentDate(new Date(year, currentDate.getMonth() + offset, 1));
+            };
+
+            // 篩選出該月份的任務，並依照日期與時間排序
+            const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
+            const monthMissions = missions
+                .filter(m => m.date && m.date.startsWith(monthPrefix))
+                .sort((a, b) => {
+                    const dateA = new Date(`${a.date}T${a.startTime || '00:00'}`);
+                    const dateB = new Date(`${b.date}T${b.startTime || '00:00'}`);
+                    return dateA - dateB;
+                });
+
+            return (
+                <div className="bg-white rounded-lg shadow-lg overflow-hidden flex flex-col min-h-[70vh]">
+                    <div className="flex justify-between items-center p-5 bg-slate-50 border-b">
+                        <button onClick={() => changeMonth(-1)} className="px-4 py-2 hover:bg-slate-200 rounded-lg text-slate-600 font-bold transition">
+                            <i className="fas fa-chevron-left mr-1"></i> 上個月
+                        </button>
+                        <h2 className="text-2xl font-black text-slate-800">{year} 年 {month} 月</h2>
+                        <button onClick={() => changeMonth(1)} className="px-4 py-2 hover:bg-slate-200 rounded-lg text-slate-600 font-bold transition">
+                            下個月 <i className="fas fa-chevron-right ml-1"></i>
+                        </button>
+                    </div>
+
+                    <div className="p-4 md:p-6 flex-grow bg-slate-100/50">
+                        {monthMissions.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center h-48 text-gray-400">
+                                <i className="far fa-calendar-times text-5xl mb-3"></i>
+                                <p className="text-lg">本月尚無任何任務</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {monthMissions.map(m => {
+                                    const currentRegCount = registrations.filter(r => r.missionId === m.id).length;
+                                    const isFull = currentRegCount >= parseInt(m.maxCapacity);
+                                    const isEnded = m.date < todayStr || m.status === 'ended';
+                                    const timeDisplay = formatTimeRange(m.startTime, m.endTime, m.time);
+                                    
+                                    let statusConfig = { text: "我要報名", style: "bg-blue-600 text-white hover:bg-blue-700 shadow-md", icon: "fa-pen" };
+                                    if (isEnded) statusConfig = { text: "已結束", style: "bg-gray-200 text-gray-500 cursor-not-allowed", icon: "fa-ban" };
+                                    else if (m.isLocked) statusConfig = { text: "已鎖定", style: "bg-amber-100 text-amber-800 font-bold", icon: "fa-lock" };
+                                    else if (isFull) statusConfig = { text: "已額滿", style: "bg-red-100 text-red-800 font-bold", icon: "fa-user-slash" };
+
+                                    return (
+                                        <div key={m.id} 
+                                            className={`flex flex-col md:flex-row items-start md:items-center bg-white border p-4 md:p-5 rounded-xl shadow-sm transition hover:shadow-md gap-4 fade-in ${isEnded ? 'opacity-70' : ''} ${m.isLocked ? 'border-amber-300 bg-amber-50' : ''}`}
+                                        >
+                                            {/* 日期與時間區塊 */}
+                                            <div className="flex-shrink-0 w-full md:w-40 border-b md:border-b-0 md:border-r border-gray-200 pb-2 md:pb-0 md:pr-4">
+                                                <div className="text-lg font-black text-slate-700">{formatDate(m.date)}</div>
+                                                <div className="text-sm font-mono text-gray-500 mt-1">{timeDisplay}</div>
+                                            </div>
+                                            
+                                            {/* 任務資訊區塊 */}
+                                            <div className="flex-grow w-full">
+                                                <h3 className="text-xl font-bold text-slate-800 mb-1">{m.title}</h3>
+                                                <div className="flex flex-wrap gap-2 text-sm text-gray-600">
+                                                    <span className="bg-gray-100 px-2 py-1 rounded"><i className="fas fa-map-marker-alt text-gray-400 mr-1"></i>{m.locationType === 'outside' ? '校外' : '校內'} - {m.location}</span>
+                                                    <span className="bg-gray-100 px-2 py-1 rounded"><i className="fas fa-users text-gray-400 mr-1"></i>{currentRegCount} / {m.maxCapacity} 人</span>
+                                                    {m.isMealProvided && <span className="bg-green-100 text-green-700 px-2 py-1 rounded"><i className="fas fa-utensils mr-1"></i>供餐</span>}
+                                                </div>
+                                            </div>
+
+                                            {/* 操作區塊 */}
+                                            <div className="flex-shrink-0 w-full md:w-auto mt-2 md:mt-0 text-right">
+                                                <button 
+                                                    onClick={() => onMissionClick(m)}
+                                                    className={`w-full md:w-auto px-6 py-3 rounded-lg font-bold transition flex items-center justify-center gap-2 ${statusConfig.style}`}
+                                                >
+                                                    <i className={`fas ${statusConfig.icon}`}></i>
+                                                    {statusConfig.text}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // 3. Mission Detail
+        const MissionDetail = ({ mission, registrations, onBack, showConfirm }) => {
+            const [form, setForm] = React.useState({ class: '', name: '', password: '', mealPreference: '' });
+            const [msg, setMsg] = React.useState('');
+            const [mode, setMode] = React.useState('view'); 
+            const [targetReg, setTargetReg] = React.useState(null);
+            const [isSubmitting, setIsSubmitting] = React.useState(false); 
+
+            const isEnded = new Date(mission.date) < new Date(new Date().toDateString()) || mission.status === 'ended';
+            const isFull = registrations.length >= parseInt(mission.maxCapacity);
+            const canRegister = !isEnded && !isFull && !mission.isLocked;
+            const timeDisplay = formatTimeRange(mission.startTime, mission.endTime, mission.time);
+
+            const sortedRegistrations = [...registrations].sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+
+            const handleRegister = async (e) => {
+                e.preventDefault();
+                if (!form.class || !form.name || !form.password || (mission.isMealProvided && !form.mealPreference)) {
+                    setMsg('請填寫所有必填欄位 (包含供餐口味)');
+                    return;
+                }
+
+                setIsSubmitting(true);
+                setMsg(''); 
+                
+                try {
+                    const snapshot = await getCollectionRef('registrations').where('missionId', '==', mission.id).get();
+                    if (snapshot.size >= parseInt(mission.maxCapacity)) {
+                         setMsg('抱歉！就在剛剛名額已滿，無法再受理報名。');
+                         setIsSubmitting(false); 
+                         return; 
+                    }
+
+                    await getCollectionRef('registrations').add({
+                        missionId: mission.id,
+                        className: form.class,
+                        studentName: form.name,
+                        editPassword: form.password,
+                        mealPreference: mission.isMealProvided ? form.mealPreference : '',
+                        createdAt: new Date().toISOString()
+                    });
+                    setMsg('報名成功！');
+                    setForm({ class: '', name: '', password: '', mealPreference: '' });
+                    setMode('view');
+                } catch (err) {
+                    console.error(err);
+                    setMsg('報名失敗，請稍後再試');
+                } finally {
+                    setIsSubmitting(false);
+                }
+            };
+
+            const verifyAndAction = async (action) => {
+                if (!form.password) {
+                    setMsg('請輸入密碼以驗證身份'); return;
+                }
+                if (form.password !== targetReg.editPassword) {
+                    setMsg('密碼錯誤'); return;
+                }
+                if (mission.isMealProvided && !form.mealPreference && action === 'update') {
+                    setMsg('請填寫餐點口味'); return;
+                }
+
+                if (action === 'delete') {
+                    showConfirm('確定要取消報名嗎？', '刪除後若要重新報名，需視當時是否有名額而定。', async () => {
+                        try {
+                            await getCollectionRef('registrations').doc(targetReg.id).delete();
+                            setMsg('已取消報名'); setMode('view'); setTargetReg(null);
+                        } catch(e) { setMsg('刪除失敗，請重試'); }
+                    });
+                } else if (action === 'update') {
+                     try {
+                         await getCollectionRef('registrations').doc(targetReg.id).update({
+                            className: form.class,
+                            studentName: form.name,
+                            editPassword: form.password,
+                            mealPreference: mission.isMealProvided ? form.mealPreference : ''
+                         });
+                         setMsg('資料更新成功'); setMode('view'); setTargetReg(null);
+                     } catch(e) { setMsg('更新失敗'); }
+                }
+            };
+
+            const startEdit = (reg) => {
+                if (mission.isLocked) { setMsg('此任務已被鎖定，無法編輯。如需異動，請用 LINE 聯繫管理者。'); return; }
+                if (isEnded) { setMsg('任務已過期，無法異動。'); return; }
+                setTargetReg(reg);
+                setForm({ class: reg.className, name: reg.studentName, password: '', mealPreference: reg.mealPreference || '' }); 
+                setMode('edit');
+                setMsg('');
+            };
+
+            return (
+                <div className="bg-white rounded-lg shadow-lg p-6 max-w-3xl mx-auto fade-in">
+                    <button onClick={onBack} className="text-gray-500 hover:text-gray-700 mb-4 flex items-center">
+                        <i className="fas fa-arrow-left mr-2"></i> 返回列表
+                    </button>
+
+                    <div className="border-b pb-4 mb-4">
+                        <div className="flex justify-between items-start">
+                            <h2 className="text-2xl font-bold text-slate-800">{mission.title}</h2>
+                            {mission.isLocked && <span className="bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-sm font-bold"><i className="fas fa-lock mr-1"></i> 已鎖定</span>}
+                        </div>
+                        <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
+                            <p><i className="far fa-calendar-alt w-5 text-center"></i> {mission.date} {timeDisplay}</p>
+                            <p><i className="fas fa-map-marker-alt w-5 text-center"></i> {mission.locationType === 'outside' ? '校外' : '校內'} - <span className="font-bold text-slate-800">{mission.location || '無詳細地點'}</span></p>
+                            <p><i className="fas fa-utensils w-5 text-center"></i> {mission.isMealProvided ? '供餐' : '不供餐'}</p>
+                            <p><i className="fas fa-users w-5 text-center"></i> 需求: {mission.maxCapacity} 人 (目前 {registrations.length} 人)</p>
+                        </div>
+                        <div className="mt-4 bg-blue-50/50 p-4 rounded-lg border text-slate-700">
+                            <h3 className="font-bold mb-2 flex items-center"><i className="fas fa-info-circle mr-2 text-blue-500"></i>任務內容</h3>
+                            <p className="whitespace-pre-wrap leading-relaxed">{mission.content}</p>
+                        </div>
+                    </div>
+
+                    {msg && <div className="bg-yellow-100 text-yellow-800 p-3 rounded mb-4 text-center font-bold shadow-sm">{msg}</div>}
+
+                    {mode === 'view' && (
+                        <div className="mb-8">
+                            {canRegister ? (
+                                <button onClick={() => { setMode('register'); setForm({class:'', name:'', password:'', mealPreference:''}); setMsg(''); }} className="w-full bg-blue-600 text-white py-4 rounded-xl hover:bg-blue-700 shadow-md font-bold text-xl flex items-center justify-center gap-2 transition">
+                                    <i className="fas fa-user-plus"></i> 我要報名
+                                </button>
+                            ) : (
+                                <div className="text-center py-4 bg-gray-100 text-gray-500 rounded-xl font-bold border">
+                                    {mission.isLocked ? "任務已鎖定，暫停報名" : (isEnded ? "任務已結束" : "已額滿，停止報名")}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {(mode === 'register' || mode === 'edit') && (
+                        <div className="bg-slate-50 p-6 rounded-xl border-2 border-blue-100 mb-8 shadow-inner">
+                            <h3 className="font-bold text-xl mb-4 text-slate-800 border-b pb-2">{mode === 'register' ? '📝 填寫報名資料' : '✏️ 編輯/刪除報名資料'}</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-600 mb-1">班級 <span className="text-red-500">*</span></label>
+                                    <input type="text" placeholder="例如: 101" className="p-2.5 border rounded-lg w-full focus:ring-2 focus:ring-blue-300 outline-none" value={form.class} onChange={e => setForm({...form, class: e.target.value})} disabled={isSubmitting} />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-600 mb-1">姓名 <span className="text-red-500">*</span></label>
+                                    <input type="text" placeholder="請填寫本名" className="p-2.5 border rounded-lg w-full focus:ring-2 focus:ring-blue-300 outline-none" value={form.name} onChange={e => setForm({...form, name: e.target.value})} disabled={isSubmitting} />
+                                </div>
+                                {mission.isMealProvided && (
+                                    <div className="md:col-span-2">
+                                        <label className="block text-sm font-bold text-gray-600 mb-1">餐點口味 <span className="text-red-500">*</span> <span className="font-normal text-xs text-blue-500">(此任務有供餐)</span></label>
+                                        <input type="text" placeholder="例如: 葷 / 素 / 不吃牛 / 海鮮過敏..." className="p-2.5 border rounded-lg w-full focus:ring-2 focus:ring-blue-300 outline-none" value={form.mealPreference} onChange={e => setForm({...form, mealPreference: e.target.value})} disabled={isSubmitting} />
+                                    </div>
+                                )}
+                                <div className="md:col-span-2">
+                                    <label className="block text-sm font-bold text-gray-600 mb-1">{mode === 'edit' ? "驗證密碼" : "設定編修密碼 (未來修改/刪除時使用)"} <span className="text-red-500">*</span></label>
+                                    <input type="text" placeholder={mode === 'edit' ? "請輸入原先設定的密碼" : "建議使用好記的數字或英文"} className="p-2.5 border rounded-lg w-full focus:ring-2 focus:ring-blue-300 outline-none" value={form.password} onChange={e => setForm({...form, password: e.target.value})} disabled={isSubmitting} />
+                                </div>
+                                
+                                <div className="md:col-span-2 flex flex-col md:flex-row gap-3 mt-2">
+                                    {mode === 'register' ? (
+                                        <>
+                                            <button onClick={handleRegister} disabled={isSubmitting} className={`flex-1 text-white py-3 rounded-lg shadow-md font-bold transition ${isSubmitting ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'}`}>
+                                                {isSubmitting ? <><i className="fas fa-spinner fa-spin mr-2"></i>處理中...</> : '確認送出報名'}
+                                            </button>
+                                            <button onClick={() => setMode('view')} disabled={isSubmitting} className="px-6 py-3 border bg-white rounded-lg hover:bg-gray-50 font-bold text-gray-600 transition">取消</button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <button onClick={() => verifyAndAction('update')} className="flex-1 bg-blue-600 text-white py-3 rounded-lg shadow-md hover:bg-blue-700 font-bold transition">儲存修改</button>
+                                            <button onClick={() => verifyAndAction('delete')} className="flex-1 bg-red-600 text-white py-3 rounded-lg shadow-md hover:bg-red-700 font-bold transition">取消報名 (刪除)</button>
+                                            <button onClick={() => {setMode('view'); setTargetReg(null);}} className="px-6 py-3 border bg-white rounded-lg hover:bg-gray-50 font-bold text-gray-600 transition">返回</button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <div>
+                        <h3 className="font-bold text-lg border-l-4 border-blue-500 pl-2 mb-3 text-slate-800">已報名名單</h3>
+                        <div className="overflow-x-auto rounded-lg border border-gray-200">
+                            <table className="w-full text-sm text-left text-gray-500">
+                                <thead className="text-xs text-gray-700 uppercase bg-slate-100 border-b">
+                                    <tr>
+                                        <th className="px-4 py-3 w-16 text-center">編號</th>
+                                        <th className="px-4 py-3">班級</th>
+                                        <th className="px-4 py-3">姓名</th>
+                                        {mission.isMealProvided && <th className="px-4 py-3 hidden md:table-cell">餐點備註</th>}
+                                        <th className="px-4 py-3 text-right">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {sortedRegistrations.length === 0 ? (
+                                        <tr><td colSpan={mission.isMealProvided ? "5" : "4"} className="px-4 py-8 text-center text-gray-400">目前尚無人報名</td></tr>
+                                    ) : (
+                                        sortedRegistrations.map((reg, index) => (
+                                            <tr key={reg.id} className="bg-white border-b hover:bg-slate-50 transition">
+                                                <td className="px-4 py-3 text-gray-400 font-mono text-center">{index + 1}</td>
+                                                <td className="px-4 py-3 font-medium text-slate-700">{reg.className}</td>
+                                                <td className="px-4 py-3 font-bold text-slate-800">{maskName(reg.studentName)}</td>
+                                                {mission.isMealProvided && <td className="px-4 py-3 text-gray-500 hidden md:table-cell">{reg.mealPreference ? '已備註' : '-'}</td>}
+                                                <td className="px-4 py-3 text-right">
+                                                    <button onClick={() => startEdit(reg)} className="text-blue-600 hover:text-blue-900 font-bold px-3 py-1 rounded hover:bg-blue-50 transition">
+                                                        修改/取消
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 4. Admin Dashboard
+        const AdminDashboard = ({ systemSettings, missions, registrations, onLogout, showConfirm }) => {
+            const [isLoggedIn, setIsLoggedIn] = React.useState(false);
+            const [loginUser, setLoginUser] = React.useState('');
+            const [loginPwd, setLoginPwd] = React.useState('');
+            const [loginMsg, setLoginMsg] = React.useState({ type: '', text: '' });
+            const [settingsMsg, setSettingsMsg] = React.useState({ type: '', text: '' });
+            const [missionMsg, setMissionMsg] = React.useState({ type: '', text: '' });
+            
+            const [tab, setTab] = React.useState('missions'); 
+            const [editMission, setEditMission] = React.useState(null); 
+            
+            const handleLogin = (e) => {
+                e.preventDefault();
+                setLoginMsg({ type: '', text: '' });
+                if (loginUser === 'admin' && loginPwd === systemSettings.adminPassword) {
+                    setLoginMsg({ type: 'success', text: '登入成功！正在跳轉...' });
+                    setTimeout(() => setIsLoggedIn(true), 800);
+                } else {
+                    setLoginMsg({ type: 'error', text: '帳號或密碼錯誤，請重新輸入' });
+                }
+            };
+
+            const handleUpdateAdminPwd = async (newPwd) => {
+                if(!newPwd) return;
+                try {
+                    await getSettingsDocRef().set({ adminPassword: newPwd }, { merge: true });
+                    setSettingsMsg({ type: 'success', text: '管理員密碼已更新成功' });
+                    setTimeout(() => setSettingsMsg({ type: '', text: '' }), 3000);
+                } catch(e) { setSettingsMsg({ type: 'error', text: '更新失敗，請稍後再試' }); }
+            };
+
+            const handleSaveMission = async (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.target);
+                const data = {
+                    title: formData.get('title'), date: formData.get('date'),
+                    startTime: formData.get('startTime'), endTime: formData.get('endTime'),
+                    location: formData.get('location'), content: formData.get('content'),
+                    locationType: formData.get('locationType'), isMealProvided: formData.get('isMealProvided') === 'on',
+                    maxCapacity: parseInt(formData.get('maxCapacity')), isLocked: editMission ? editMission.isLocked : false, status: 'active'
+                };
+                try {
+                    const colRef = getCollectionRef('missions');
+                    if (editMission?.id) await colRef.doc(editMission.id).update(data);
+                    else await colRef.add(data);
+                    setEditMission(null);
+                    setMissionMsg({ type: 'success', text: '任務儲存成功' });
+                    setTimeout(() => setMissionMsg({ type: '', text: '' }), 3000);
+                } catch(err) { setMissionMsg({ type: 'error', text: '儲存失敗，請稍後再試' }); }
+            };
+
+            const toggleLock = async (m) => await getCollectionRef('missions').doc(m.id).update({ isLocked: !m.isLocked });
+
+            const deleteMission = (id) => {
+                showConfirm('確定刪除此任務？', '此操作無法復原，相關報名資料建議您手動備份。', async () => {
+                    await getCollectionRef('missions').doc(id).delete();
+                    setMissionMsg({ type: 'success', text: '任務已刪除' });
+                    setTimeout(() => setMissionMsg({ type: '', text: '' }), 3000);
+                });
+            };
+
+            const resetUserPwd = (regId) => {
+                showConfirm('確定重置密碼？', '使用者的密碼將會被強制更改為 123456。', async () => {
+                    await getCollectionRef('registrations').doc(regId).update({ editPassword: '123456' });
+                    setMissionMsg({ type: 'success', text: '密碼已重置為 123456' });
+                    setTimeout(() => setMissionMsg({ type: '', text: '' }), 3000);
+                });
+            };
+
+            if (!isLoggedIn) {
+                return (
+                    <div className="flex justify-center items-center py-10">
+                        <form onSubmit={handleLogin} className="bg-white p-8 rounded-xl shadow-lg w-full max-w-sm border">
+                            <h2 className="text-2xl font-black mb-6 text-center text-slate-800">管理員登入</h2>
+                            {loginMsg.text && <div className={`mb-4 p-3 text-center rounded-lg text-sm font-bold ${loginMsg.type === 'error' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{loginMsg.text}</div>}
+                            <input className="w-full p-3 border rounded-lg mb-4 focus:ring-2 outline-none" type="text" placeholder="請輸入帳號" value={loginUser} onChange={e=>setLoginUser(e.target.value)} />
+                            <input className="w-full p-3 border rounded-lg mb-6 focus:ring-2 outline-none" type="password" placeholder="請輸入密碼" value={loginPwd} onChange={e=>setLoginPwd(e.target.value)} />
+                            <button className="w-full bg-slate-800 text-white p-3 rounded-lg font-bold hover:bg-slate-700 transition shadow-md">登入系統</button>
+                        </form>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="bg-white p-4 md:p-8 rounded-xl shadow-lg min-h-[80vh] border fade-in">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 border-b pb-4 gap-4">
+                        <h2 className="text-2xl font-black text-slate-800"><i className="fas fa-tools mr-2 text-blue-600"></i>後台管理系統</h2>
+                        <div className="flex flex-wrap gap-2 w-full md:w-auto">
+                            <button onClick={() => setTab('missions')} className={`flex-1 md:flex-none px-5 py-2 rounded-lg font-bold transition ${tab==='missions'?'bg-blue-600 text-white shadow-md':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>任務管理</button>
+                            <button onClick={() => setTab('settings')} className={`flex-1 md:flex-none px-5 py-2 rounded-lg font-bold transition ${tab==='settings'?'bg-blue-600 text-white shadow-md':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>系統設定</button>
+                            <button onClick={onLogout} className="px-5 py-2 bg-red-100 text-red-700 font-bold rounded-lg hover:bg-red-200 transition">安全登出</button>
+                        </div>
+                    </div>
+
+                    {tab === 'settings' && (
+                         <div className="max-w-md mx-auto mt-10 p-8 bg-slate-50 rounded-xl border">
+                             <h3 className="text-xl font-bold mb-6 text-slate-800">修改管理員密碼</h3>
+                             {settingsMsg.text && <div className={`mb-4 p-3 text-center rounded-lg text-sm font-bold ${settingsMsg.type === 'error' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{settingsMsg.text}</div>}
+                             <form onSubmit={(e) => { e.preventDefault(); handleUpdateAdminPwd(e.target.newpwd.value); e.target.newpwd.value = ''; }}>
+                                 <label className="block text-sm font-bold text-gray-600 mb-2">新密碼</label>
+                                 <input name="newpwd" type="text" className="w-full border p-3 rounded-lg mb-6 focus:ring-2 outline-none" placeholder="請輸入新密碼" required />
+                                 <button className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold shadow hover:bg-blue-700 transition">更新密碼</button>
+                             </form>
+                         </div>
+                    )}
+
+                    {tab === 'missions' && (
+                        <div>
+                            {missionMsg.text && <div className={`mb-6 p-4 text-center rounded-lg shadow-sm font-bold ${missionMsg.type === 'error' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{missionMsg.text}</div>}
+
+                            {/* Edit/Create Form */}
+                            <div className="bg-slate-50 p-6 rounded-xl mb-10 border shadow-inner">
+                                <h3 className="font-bold text-xl mb-6 text-slate-800 border-b pb-2">{editMission ? '✏️ 編輯任務' : '➕ 新增任務'}</h3>
+                                <form onSubmit={handleSaveMission} className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                    <div className="col-span-2 md:col-span-1">
+                                        <label className="block text-sm font-bold text-gray-600 mb-1">任務主題</label>
+                                        <input name="title" required defaultValue={editMission?.title} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-gray-600 mb-1">日期</label>
+                                        <input name="date" type="date" required defaultValue={editMission?.date} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-sm font-bold text-gray-600 mb-1">開始時間</label>
+                                            <input name="startTime" type="time" required defaultValue={editMission?.startTime} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-bold text-gray-600 mb-1">結束時間</label>
+                                            <input name="endTime" type="time" required defaultValue={editMission?.endTime} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-bold text-gray-600 mb-1">人數上限</label>
+                                        <input name="maxCapacity" type="number" required defaultValue={editMission?.maxCapacity || 5} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-sm font-bold text-gray-600 mb-1">地點類型</label>
+                                            <select name="locationType" defaultValue={editMission?.locationType || 'school'} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none bg-white">
+                                                <option value="school">校內</option>
+                                                <option value="outside">校外</option>
+                                            </select>
+                                        </div>
+                                        <div className="flex items-center pt-6 px-2 bg-white border rounded-lg cursor-pointer hover:bg-gray-50 transition">
+                                            <input id="mealCheckbox" name="isMealProvided" type="checkbox" defaultChecked={editMission?.isMealProvided} className="mr-3 w-5 h-5 cursor-pointer accent-blue-600" />
+                                            <label htmlFor="mealCheckbox" className="font-bold text-gray-700 cursor-pointer select-none">提供餐點</label>
+                                        </div>
+                                    </div>
+                                    <div className="col-span-2 md:col-span-1">
+                                        <label className="block text-sm font-bold text-gray-600 mb-1">任務地點詳細</label>
+                                        <input name="location" type="text" placeholder="例：操場、體育館、校門口" required defaultValue={editMission?.location} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none" />
+                                    </div>
+                                    <div className="col-span-2">
+                                        <label className="block text-sm font-bold text-gray-600 mb-1">任務詳細內容</label>
+                                        <textarea name="content" rows="4" required defaultValue={editMission?.content} className="w-full border p-3 rounded-lg focus:ring-2 outline-none leading-relaxed"></textarea>
+                                    </div>
+                                    <div className="col-span-2 flex gap-3 pt-2">
+                                        <button type="submit" className="bg-green-600 text-white px-8 py-3 rounded-lg font-bold shadow-md hover:bg-green-700 transition">儲存任務</button>
+                                        {editMission && <button type="button" onClick={() => setEditMission(null)} className="bg-gray-400 text-white px-6 py-3 rounded-lg font-bold hover:bg-gray-500 transition">取消編輯</button>}
+                                    </div>
+                                </form>
+                            </div>
+
+                            {/* List */}
+                            <h3 className="font-bold text-xl mb-4 text-slate-800 border-l-4 border-blue-600 pl-3">任務列表 (總計 {missions.length} 筆)</h3>
+                            <div className="space-y-4">
+                                {missions.sort((a,b) => new Date(b.date) - new Date(a.date)).map(m => {
+                                    // 後台名單排序 (依照報名時間)
+                                    const missionRegs = registrations.filter(r => r.missionId === m.id).sort((ra, rb) => new Date(ra.createdAt || 0) - new Date(rb.createdAt || 0));
+                                    const timeDisplay = formatTimeRange(m.startTime, m.endTime, m.time);
+                                    return (
+                                        <div key={m.id} className={`border p-5 rounded-xl flex flex-col lg:flex-row gap-5 transition hover:shadow-md ${m.isLocked ? 'bg-amber-50 border-amber-300' : 'bg-white'}`}>
+                                            <div className="flex-grow">
+                                                <div className="flex items-center gap-3 mb-2">
+                                                    <span className="bg-slate-800 text-white px-3 py-1 rounded text-sm font-mono shadow-sm">{m.date}</span>
+                                                    <span className="text-slate-600 font-mono text-sm">{timeDisplay}</span>
+                                                    {m.isLocked && <span className="bg-amber-200 text-amber-800 text-xs px-2 py-1 rounded font-bold"><i className="fas fa-lock mr-1"></i>已鎖定</span>}
+                                                </div>
+                                                <h4 className="font-black text-xl text-blue-700 mb-2">{m.title}</h4>
+                                                
+                                                <div className="flex flex-wrap gap-2 text-sm text-gray-600 mb-3">
+                                                    <span className="bg-gray-100 px-2 py-1 rounded"><i className="fas fa-map-marker-alt text-gray-400 mr-1"></i>{m.locationType==='outside'?'校外':'校內'} - {m.location}</span>
+                                                    {m.isMealProvided && <span className="bg-green-100 text-green-700 px-2 py-1 rounded font-bold"><i className="fas fa-utensils mr-1"></i>供餐</span>}
+                                                </div>
+                                                <p className="text-sm text-gray-500 mb-3 leading-relaxed bg-gray-50 p-3 rounded">{m.content}</p>
+                                                
+                                                <button onClick={() => { document.getElementById(`details-${m.id}`).classList.toggle('hidden'); }} className="text-sm font-bold text-white bg-blue-500 px-4 py-2 rounded hover:bg-blue-600 transition shadow-sm">
+                                                    <i className="fas fa-users mr-2"></i>展開報名名單 ({missionRegs.length} / {m.maxCapacity} 人)
+                                                </button>
+                                                
+                                                {/* Hidden Registrant List for Admin */}
+                                                <div id={`details-${m.id}`} className="hidden mt-4 bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
+                                                    {missionRegs.length === 0 ? <p className="p-4 text-center text-gray-400">目前尚無人報名</p> : (
+                                                        <table className="w-full text-sm text-left">
+                                                            <thead className="bg-slate-200 text-slate-600">
+                                                                <tr>
+                                                                    <th className="px-4 py-2 w-12 text-center">#</th>
+                                                                    <th className="px-4 py-2">班級 / 姓名</th>
+                                                                    <th className="px-4 py-2 hidden md:table-cell">編輯密碼</th>
+                                                                    {m.isMealProvided && <th className="px-4 py-2">餐點口味</th>}
+                                                                    <th className="px-4 py-2 text-right">管理操作</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-gray-200">
+                                                                {missionRegs.map((r, idx) => (
+                                                                    <tr key={r.id} className="hover:bg-white transition">
+                                                                        <td className="px-4 py-2 text-center font-mono text-gray-400">{idx + 1}</td>
+                                                                        <td className="px-4 py-2 font-bold text-slate-700">{r.className} <span className="text-blue-600">{r.studentName}</span></td>
+                                                                        <td className="px-4 py-2 font-mono text-gray-500 hidden md:table-cell">{r.editPassword}</td>
+                                                                        {m.isMealProvided && (
+                                                                            <td className="px-4 py-2">
+                                                                                <span className={`px-2 py-1 rounded text-xs ${r.mealPreference ? 'bg-green-100 text-green-700 font-bold' : 'bg-red-50 text-red-400'}`}>
+                                                                                    {r.mealPreference || '未填寫'}
+                                                                                </span>
+                                                                            </td>
+                                                                        )}
+                                                                        <td className="px-4 py-2 text-right">
+                                                                            <button onClick={() => resetUserPwd(r.id)} className="text-xs bg-red-100 text-red-700 px-3 py-1.5 rounded font-bold hover:bg-red-200 transition">重置密碼</button>
+                                                                        </td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {/* Admin Actions */}
+                                            <div className="flex flex-row lg:flex-col items-center justify-end gap-2 shrink-0 border-t lg:border-t-0 pt-4 lg:pt-0">
+                                                <button onClick={() => toggleLock(m)} className={`w-full lg:w-32 py-2 rounded-lg font-bold shadow-sm transition ${m.isLocked ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
+                                                    <i className={`fas ${m.isLocked ? 'fa-lock' : 'fa-lock-open'} mr-2`}></i>{m.isLocked ? '解除鎖定' : '鎖定任務'}
+                                                </button>
+                                                <button onClick={() => setEditMission(m)} className="w-full lg:w-32 py-2 bg-blue-100 text-blue-700 rounded-lg font-bold shadow-sm hover:bg-blue-200 transition">
+                                                    <i className="fas fa-edit mr-2"></i>編輯
+                                                </button>
+                                                <button onClick={() => deleteMission(m.id)} className="w-full lg:w-32 py-2 bg-red-100 text-red-700 rounded-lg font-bold shadow-sm hover:bg-red-200 transition">
+                                                    <i className="fas fa-trash mr-2"></i>刪除
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
