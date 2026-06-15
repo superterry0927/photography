@@ -234,7 +234,6 @@
                 setCurrentDate(new Date(year, currentDate.getMonth() + offset, 1));
             };
 
-            // 篩選出該月份的任務，並依照日期與時間排序
             const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
             const monthMissions = missions
                 .filter(m => m.date && m.date.startsWith(monthPrefix))
@@ -279,13 +278,11 @@
                                         <div key={m.id} 
                                             className={`flex flex-col md:flex-row items-start md:items-center bg-white border p-4 md:p-5 rounded-xl shadow-sm transition hover:shadow-md gap-4 fade-in ${isEnded ? 'opacity-70' : ''} ${m.isLocked ? 'border-amber-300 bg-amber-50' : ''}`}
                                         >
-                                            {/* 日期與時間區塊 */}
                                             <div className="flex-shrink-0 w-full md:w-40 border-b md:border-b-0 md:border-r border-gray-200 pb-2 md:pb-0 md:pr-4">
                                                 <div className="text-lg font-black text-slate-700">{formatDate(m.date)}</div>
                                                 <div className="text-sm font-mono text-gray-500 mt-1">{timeDisplay}</div>
                                             </div>
                                             
-                                            {/* 任務資訊區塊 */}
                                             <div className="flex-grow w-full">
                                                 <h3 className="text-xl font-bold text-slate-800 mb-1">{m.title}</h3>
                                                 <div className="flex flex-wrap gap-2 text-sm text-gray-600">
@@ -295,7 +292,6 @@
                                                 </div>
                                             </div>
 
-                                            {/* 操作區塊 */}
                                             <div className="flex-shrink-0 w-full md:w-auto mt-2 md:mt-0 text-right">
                                                 <button 
                                                     onClick={() => onMissionClick(m)}
@@ -375,7 +371,7 @@
                     setMsg('密碼錯誤'); return;
                 }
                 if (mission.isMealProvided && !form.mealPreference && action === 'update') {
-                    setMsg('請填寫餐點口味'); return;
+                    setMsg('請填寫餐點需求'); return;
                 }
 
                 if (action === 'delete') {
@@ -421,7 +417,7 @@
                         <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
                             <p><i className="far fa-calendar-alt w-5 text-center"></i> {mission.date} {timeDisplay}</p>
                             <p><i className="fas fa-map-marker-alt w-5 text-center"></i> {mission.locationType === 'outside' ? '校外' : '校內'} - <span className="font-bold text-slate-800">{mission.location || '無詳細地點'}</span></p>
-                            <p><i className="fas fa-utensils w-5 text-center"></i> {mission.isMealProvided ? '供餐' : '不供餐'}</p>
+                            <p><i className="fas fa-utensils w-5 text-center"></i> {mission.isMealProvided ? `供餐 (${mission.mealInfo || '未特別說明'})` : '不供餐'}</p>
                             <p><i className="fas fa-users w-5 text-center"></i> 需求: {mission.maxCapacity} 人 (目前 {registrations.length} 人)</p>
                         </div>
                         <div className="mt-4 bg-blue-50/50 p-4 rounded-lg border text-slate-700">
@@ -460,8 +456,8 @@
                                 </div>
                                 {mission.isMealProvided && (
                                     <div className="md:col-span-2">
-                                        <label className="block text-sm font-bold text-gray-600 mb-1">餐點口味 <span className="text-red-500">*</span> <span className="font-normal text-xs text-blue-500">(此任務有供餐)</span></label>
-                                        <input type="text" placeholder="例如: 葷 / 素 / 不吃牛 / 海鮮過敏..." className="p-2.5 border rounded-lg w-full focus:ring-2 focus:ring-blue-300 outline-none" value={form.mealPreference} onChange={e => setForm({...form, mealPreference: e.target.value})} disabled={isSubmitting} />
+                                        <label className="block text-sm font-bold text-gray-600 mb-1">餐點需求 <span className="text-red-500">*</span> <span className="font-normal text-xs text-blue-500">(提示: {mission.mealInfo || '有供餐'})</span></label>
+                                        <input type="text" placeholder="請根據提示填寫您的需求 (例如: 葷 / 素 / 不吃牛)" className="p-2.5 border rounded-lg w-full focus:ring-2 focus:ring-blue-300 outline-none" value={form.mealPreference} onChange={e => setForm({...form, mealPreference: e.target.value})} disabled={isSubmitting} />
                                     </div>
                                 )}
                                 <div className="md:col-span-2">
@@ -498,7 +494,7 @@
                                         <th className="px-4 py-3 w-16 text-center">編號</th>
                                         <th className="px-4 py-3">班級</th>
                                         <th className="px-4 py-3">姓名</th>
-                                        {mission.isMealProvided && <th className="px-4 py-3 hidden md:table-cell">餐點備註</th>}
+                                        {mission.isMealProvided && <th className="px-4 py-3 hidden md:table-cell">餐點需求</th>}
                                         <th className="px-4 py-3 text-right">操作</th>
                                     </tr>
                                 </thead>
@@ -531,7 +527,6 @@
         // 4. Admin Dashboard
         const AdminDashboard = ({ systemSettings, missions, registrations, onLogout, showConfirm }) => {
             const [isLoggedIn, setIsLoggedIn] = React.useState(false);
-            const [loginUser, setLoginUser] = React.useState('');
             const [loginPwd, setLoginPwd] = React.useState('');
             const [loginMsg, setLoginMsg] = React.useState({ type: '', text: '' });
             const [settingsMsg, setSettingsMsg] = React.useState({ type: '', text: '' });
@@ -539,15 +534,26 @@
             
             const [tab, setTab] = React.useState('missions'); 
             const [editMission, setEditMission] = React.useState(null); 
+            const [mealProvidedChecked, setMealProvidedChecked] = React.useState(false);
+
+            // 當點擊編輯按鈕時，同步更新「是否供餐」的狀態以展開/收合對應輸入框
+            React.useEffect(() => {
+                if (editMission) {
+                    setMealProvidedChecked(!!editMission.isMealProvided);
+                } else {
+                    setMealProvidedChecked(false);
+                }
+            }, [editMission]);
             
             const handleLogin = (e) => {
                 e.preventDefault();
                 setLoginMsg({ type: '', text: '' });
-                if (loginUser === 'admin' && loginPwd === systemSettings.adminPassword) {
+                // 只需比對密碼即可
+                if (loginPwd === systemSettings.adminPassword) {
                     setLoginMsg({ type: 'success', text: '登入成功！正在跳轉...' });
                     setTimeout(() => setIsLoggedIn(true), 800);
                 } else {
-                    setLoginMsg({ type: 'error', text: '帳號或密碼錯誤，請重新輸入' });
+                    setLoginMsg({ type: 'error', text: '密碼錯誤，請重新輸入' });
                 }
             };
 
@@ -563,11 +569,14 @@
             const handleSaveMission = async (e) => {
                 e.preventDefault();
                 const formData = new FormData(e.target);
+                const isMealProvided = formData.get('isMealProvided') === 'on';
                 const data = {
                     title: formData.get('title'), date: formData.get('date'),
                     startTime: formData.get('startTime'), endTime: formData.get('endTime'),
                     location: formData.get('location'), content: formData.get('content'),
-                    locationType: formData.get('locationType'), isMealProvided: formData.get('isMealProvided') === 'on',
+                    locationType: formData.get('locationType'), 
+                    isMealProvided: isMealProvided,
+                    mealInfo: isMealProvided ? formData.get('mealInfo') || '' : '',
                     maxCapacity: parseInt(formData.get('maxCapacity')), isLocked: editMission ? editMission.isLocked : false, status: 'active'
                 };
                 try {
@@ -604,8 +613,7 @@
                         <form onSubmit={handleLogin} className="bg-white p-8 rounded-xl shadow-lg w-full max-w-sm border">
                             <h2 className="text-2xl font-black mb-6 text-center text-slate-800">管理員登入</h2>
                             {loginMsg.text && <div className={`mb-4 p-3 text-center rounded-lg text-sm font-bold ${loginMsg.type === 'error' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{loginMsg.text}</div>}
-                            <input className="w-full p-3 border rounded-lg mb-4 focus:ring-2 outline-none" type="text" placeholder="請輸入帳號" value={loginUser} onChange={e=>setLoginUser(e.target.value)} />
-                            <input className="w-full p-3 border rounded-lg mb-6 focus:ring-2 outline-none" type="password" placeholder="請輸入密碼" value={loginPwd} onChange={e=>setLoginPwd(e.target.value)} />
+                            <input className="w-full p-3 border rounded-lg mb-6 focus:ring-2 outline-none" type="password" placeholder="請輸入管理員密碼" value={loginPwd} onChange={e=>setLoginPwd(e.target.value)} />
                             <button className="w-full bg-slate-800 text-white p-3 rounded-lg font-bold hover:bg-slate-700 transition shadow-md">登入系統</button>
                         </form>
                     </div>
@@ -665,7 +673,8 @@
                                         <label className="block text-sm font-bold text-gray-600 mb-1">人數上限</label>
                                         <input name="maxCapacity" type="number" required defaultValue={editMission?.maxCapacity || 5} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none" />
                                     </div>
-                                    <div className="grid grid-cols-2 gap-3">
+                                    
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                         <div>
                                             <label className="block text-sm font-bold text-gray-600 mb-1">地點類型</label>
                                             <select name="locationType" defaultValue={editMission?.locationType || 'school'} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none bg-white">
@@ -673,11 +682,21 @@
                                                 <option value="outside">校外</option>
                                             </select>
                                         </div>
-                                        <div className="flex items-center pt-6 px-2 bg-white border rounded-lg cursor-pointer hover:bg-gray-50 transition">
-                                            <input id="mealCheckbox" name="isMealProvided" type="checkbox" defaultChecked={editMission?.isMealProvided} className="mr-3 w-5 h-5 cursor-pointer accent-blue-600" />
-                                            <label htmlFor="mealCheckbox" className="font-bold text-gray-700 cursor-pointer select-none">提供餐點</label>
+                                        <div className="flex flex-col justify-end">
+                                            <div className="flex items-center h-[46px] px-3 bg-white border rounded-lg cursor-pointer hover:bg-gray-50 transition">
+                                                <input id="mealCheckbox" name="isMealProvided" type="checkbox" checked={mealProvidedChecked} onChange={(e) => setMealProvidedChecked(e.target.checked)} className="mr-3 w-5 h-5 cursor-pointer accent-blue-600" />
+                                                <label htmlFor="mealCheckbox" className="font-bold text-gray-700 cursor-pointer select-none flex-grow h-full flex items-center">提供餐點</label>
+                                            </div>
                                         </div>
                                     </div>
+
+                                    {mealProvidedChecked && (
+                                        <div className="col-span-2 fade-in">
+                                            <label className="block text-sm font-bold text-gray-600 mb-1">餐點種類 / 說明 (供學生參考填寫)</label>
+                                            <input name="mealInfo" type="text" placeholder="例如：提供便當，請學生註明葷素 / 提供麥當勞，請註明主餐..." required defaultValue={editMission?.mealInfo} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none border-blue-300" />
+                                        </div>
+                                    )}
+
                                     <div className="col-span-2 md:col-span-1">
                                         <label className="block text-sm font-bold text-gray-600 mb-1">任務地點詳細</label>
                                         <input name="location" type="text" placeholder="例：操場、體育館、校門口" required defaultValue={editMission?.location} className="w-full border p-2.5 rounded-lg focus:ring-2 outline-none" />
@@ -712,7 +731,7 @@
                                                 
                                                 <div className="flex flex-wrap gap-2 text-sm text-gray-600 mb-3">
                                                     <span className="bg-gray-100 px-2 py-1 rounded"><i className="fas fa-map-marker-alt text-gray-400 mr-1"></i>{m.locationType==='outside'?'校外':'校內'} - {m.location}</span>
-                                                    {m.isMealProvided && <span className="bg-green-100 text-green-700 px-2 py-1 rounded font-bold"><i className="fas fa-utensils mr-1"></i>供餐</span>}
+                                                    {m.isMealProvided && <span className="bg-green-100 text-green-700 px-2 py-1 rounded font-bold"><i className="fas fa-utensils mr-1"></i>供餐 ({m.mealInfo || '未註明'})</span>}
                                                 </div>
                                                 <p className="text-sm text-gray-500 mb-3 leading-relaxed bg-gray-50 p-3 rounded">{m.content}</p>
                                                 
@@ -729,7 +748,7 @@
                                                                     <th className="px-4 py-2 w-12 text-center">#</th>
                                                                     <th className="px-4 py-2">班級 / 姓名</th>
                                                                     <th className="px-4 py-2 hidden md:table-cell">編輯密碼</th>
-                                                                    {m.isMealProvided && <th className="px-4 py-2">餐點口味</th>}
+                                                                    {m.isMealProvided && <th className="px-4 py-2">餐點需求</th>}
                                                                     <th className="px-4 py-2 text-right">管理操作</th>
                                                                 </tr>
                                                             </thead>
