@@ -12,7 +12,7 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     
     <!-- Babel -->
-   <script src="https://unpkg.com/@babel/standalone@7.24.4/babel.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <!-- Firebase SDKs (Compat version for stability in simple HTML) -->
     <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
@@ -21,6 +21,33 @@
 
     <style>
         body { font-family: 'Noto Sans TC', sans-serif; background-color: #f3f4f6; }
+        
+        /* 月曆格子基礎設定 */
+        .calendar-day { 
+            min-height: 100px; 
+        }
+        @media (max-width: 768px) {
+            .calendar-day { min-height: 80px; }
+        }
+        
+        /* 當天發光特效 */
+        .glow-today {
+            box-shadow: 0 0 12px 2px rgba(59, 130, 246, 0.5);
+            border: 2px solid #3b82f6 !important;
+            position: relative;
+            z-index: 10;
+            animation: pulse-glow 2.5s infinite ease-in-out;
+        }
+        
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 8px 1px rgba(59, 130, 246, 0.4); }
+            50% { box-shadow: 0 0 16px 4px rgba(59, 130, 246, 0.75); }
+        }
+
+        /* 滾動條美化 */
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+
         .modal-overlay { background-color: rgba(0, 0, 0, 0.5); }
         .fade-in { animation: fadeIn 0.2s ease-in-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
@@ -93,13 +120,19 @@
             if(!dateStr) return '';
             const d = new Date(dateStr);
             const days = ['日', '一', '二', '三', '四', '五', '六'];
-            return `${d.getMonth() + 1}/${d.getDate()} (${days[d.getDay()]})`;
+            return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} (${days[d.getDay()]})`;
         };
         
         const formatTimeRange = (start, end, fallback) => {
             if (start && end) return `${start} ~ ${end}`;
             if (start) return `${start} 開始`;
             return fallback || '';
+        };
+
+        // 取得台灣時間的「今天日期字串 (YYYY-MM-DD)」以避免時區誤差
+        const getLocalTodayString = () => {
+            const tzOffset = (new Date()).getTimezoneOffset() * 60000;
+            return (new Date(Date.now() - tzOffset)).toISOString().split('T')[0];
         };
 
         // ---------------------------------------------------------
@@ -126,7 +159,7 @@
             const [user, setUser] = React.useState(null);
             const [missions, setMissions] = React.useState([]);
             const [registrations, setRegistrations] = React.useState([]);
-            const [view, setView] = React.useState('monthly-list'); 
+            const [view, setView] = React.useState('calendar'); 
             const [selectedMission, setSelectedMission] = React.useState(null);
             const [systemSettings, setSystemSettings] = React.useState({ adminPassword: 'admin' });
             const [confirmData, setConfirmData] = React.useState({ isOpen: false, title: '', message: '', onConfirm: null });
@@ -178,7 +211,7 @@
             };
 
             const goHome = () => {
-                setView('monthly-list');
+                setView('calendar');
                 setSelectedMission(null);
             };
 
@@ -205,8 +238,8 @@
                     </header>
 
                     <main className="flex-grow container mx-auto p-2 md:p-6">
-                        {view === 'monthly-list' && (
-                            <MonthlyListView missions={missions} registrations={registrations} onMissionClick={handleMissionClick} />
+                        {view === 'calendar' && (
+                            <CalendarView missions={missions} registrations={registrations} onMissionClick={handleMissionClick} />
                         )}
                         {view === 'mission-detail' && selectedMission && (
                             <MissionDetail mission={selectedMission} registrations={registrations.filter(r => r.missionId === selectedMission.id)} onBack={goHome} showConfirm={showConfirm} />
@@ -223,89 +256,119 @@
             );
         };
 
-        // 2. Monthly List View (Horizontal Rows)
-        const MonthlyListView = ({ missions, registrations, onMissionClick }) => {
+        // 2. Calendar Grid View
+        const CalendarView = ({ missions, registrations, onMissionClick }) => {
             const [currentDate, setCurrentDate] = React.useState(new Date());
             const year = currentDate.getFullYear();
-            const month = currentDate.getMonth() + 1;
-            const todayStr = new Date().toISOString().split('T')[0];
+            const month = currentDate.getMonth();
+            const todayStr = getLocalTodayString();
 
             const changeMonth = (offset) => {
-                setCurrentDate(new Date(year, currentDate.getMonth() + offset, 1));
+                setCurrentDate(new Date(year, month + offset, 1));
             };
 
-            const monthPrefix = `${year}-${String(month).padStart(2, '0')}`;
-            const monthMissions = missions
-                .filter(m => m.date && m.date.startsWith(monthPrefix))
-                .sort((a, b) => {
-                    const dateA = new Date(`${a.date}T${a.startTime || '00:00'}`);
-                    const dateB = new Date(`${b.date}T${b.startTime || '00:00'}`);
-                    return dateA - dateB;
-                });
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const firstDay = new Date(year, month, 1).getDay(); // 0 = Sunday
+
+            // 產生月曆格子陣列
+            const cells = [];
+            
+            // 填補月初空白格
+            for (let i = 0; i < firstDay; i++) {
+                cells.push(<div key={`empty-${i}`} className="bg-slate-50 border-r border-b border-gray-200 hidden md:block"></div>);
+            }
+
+            // 填入當月天數
+            for (let d = 1; d <= daysInMonth; d++) {
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                const isToday = dateStr === todayStr;
+                
+                // 篩選該日任務並以開始時間排序
+                const daysMissions = missions
+                    .filter(m => m.date === dateStr)
+                    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+                
+                const isPast = dateStr < todayStr;
+
+                cells.push(
+                    <div key={d} className={`calendar-day bg-white p-1 md:p-2 border-r border-b border-gray-200 flex flex-col relative transition-all ${isToday ? 'glow-today rounded-lg' : ''}`}>
+                        <div className={`text-right text-xs md:text-sm font-black mb-1 ${isToday ? 'text-blue-600' : 'text-slate-600'}`}>
+                            {d}
+                        </div>
+                        
+                        <div className="flex-grow flex flex-col gap-1 overflow-y-auto custom-scrollbar pr-1">
+                            {daysMissions.map((m) => {
+                                const currentRegCount = registrations.filter(r => r.missionId === m.id).length;
+                                const isFull = currentRegCount >= parseInt(m.maxCapacity);
+                                const isEnded = isPast || m.status === 'ended';
+                                
+                                let badgeColor = "bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 hover:border-blue-300";
+                                if (isEnded) badgeColor = "bg-gray-100 text-gray-500 border-gray-200 grayscale hover:bg-gray-200 cursor-not-allowed";
+                                else if (isFull) badgeColor = "bg-red-50 text-red-700 border-red-200 hover:bg-red-100";
+                                else if (m.isLocked) badgeColor = "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100";
+
+                                return (
+                                    <button 
+                                        key={m.id}
+                                        onClick={() => onMissionClick(m)}
+                                        className={`text-left text-xs p-1 md:p-1.5 rounded border transition-colors shadow-sm flex flex-col ${badgeColor}`}
+                                        title={`${m.startTime || ''} ${m.title} (${currentRegCount}/${m.maxCapacity}人)`}
+                                    >
+                                        <div className="font-bold truncate w-full flex items-center gap-1">
+                                            {m.isLocked && <i className="fas fa-lock text-[10px] text-amber-600 shrink-0"></i>}
+                                            {isFull && !isEnded && !m.isLocked && <i className="fas fa-user-slash text-[10px] text-red-500 shrink-0"></i>}
+                                            <span className="truncate">{m.title}</span>
+                                        </div>
+                                        <div className="flex justify-between items-center mt-1 text-[10px] text-gray-500 font-mono hidden md:flex">
+                                            <span>{m.startTime}</span>
+                                            <span className={`px-1 rounded ${isFull ? 'bg-red-100 text-red-700' : 'bg-white'}`}>{currentRegCount}/{m.maxCapacity}</span>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                );
+            }
+
+            // 填補月末空白格使其成為完整的矩形
+            const totalCells = cells.length;
+            const remainingCells = totalCells % 7 === 0 ? 0 : 7 - (totalCells % 7);
+            for (let i = 0; i < remainingCells; i++) {
+                cells.push(<div key={`empty-end-${i}`} className="bg-slate-50 border-r border-b border-gray-200 hidden md:block"></div>);
+            }
 
             return (
-                <div className="bg-white rounded-lg shadow-lg overflow-hidden flex flex-col min-h-[70vh]">
-                    <div className="flex justify-between items-center p-5 bg-slate-50 border-b">
-                        <button onClick={() => changeMonth(-1)} className="px-4 py-2 hover:bg-slate-200 rounded-lg text-slate-600 font-bold transition">
-                            <i className="fas fa-chevron-left mr-1"></i> 上個月
+                <div className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col min-h-[70vh] fade-in">
+                    <div className="flex justify-between items-center p-4 md:p-5 bg-slate-50 border-b">
+                        <button onClick={() => changeMonth(-1)} className="px-3 md:px-4 py-2 hover:bg-slate-200 rounded-lg text-slate-600 font-bold transition">
+                            <i className="fas fa-chevron-left mr-1"></i> 上月
                         </button>
-                        <h2 className="text-2xl font-black text-slate-800">{year} 年 {month} 月</h2>
-                        <button onClick={() => changeMonth(1)} className="px-4 py-2 hover:bg-slate-200 rounded-lg text-slate-600 font-bold transition">
-                            下個月 <i className="fas fa-chevron-right ml-1"></i>
+                        <h2 className="text-xl md:text-2xl font-black text-slate-800 tracking-wider">{year} 年 {month + 1} 月</h2>
+                        <button onClick={() => changeMonth(1)} className="px-3 md:px-4 py-2 hover:bg-slate-200 rounded-lg text-slate-600 font-bold transition">
+                            下月 <i className="fas fa-chevron-right ml-1"></i>
                         </button>
                     </div>
 
-                    <div className="p-4 md:p-6 flex-grow bg-slate-100/50">
-                        {monthMissions.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-48 text-gray-400">
-                                <i className="far fa-calendar-times text-5xl mb-3"></i>
-                                <p className="text-lg">本月尚無任何任務</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-4">
-                                {monthMissions.map(m => {
-                                    const currentRegCount = registrations.filter(r => r.missionId === m.id).length;
-                                    const isFull = currentRegCount >= parseInt(m.maxCapacity);
-                                    const isEnded = m.date < todayStr || m.status === 'ended';
-                                    const timeDisplay = formatTimeRange(m.startTime, m.endTime, m.time);
-                                    
-                                    let statusConfig = { text: "我要報名", style: "bg-blue-600 text-white hover:bg-blue-700 shadow-md", icon: "fa-pen" };
-                                    if (isEnded) statusConfig = { text: "已結束", style: "bg-gray-200 text-gray-500 cursor-not-allowed", icon: "fa-ban" };
-                                    else if (m.isLocked) statusConfig = { text: "已鎖定", style: "bg-amber-100 text-amber-800 font-bold", icon: "fa-lock" };
-                                    else if (isFull) statusConfig = { text: "已額滿", style: "bg-red-100 text-red-800 font-bold", icon: "fa-user-slash" };
+                    <div className="grid grid-cols-7 bg-slate-800 text-white text-center text-sm py-2 font-medium shrink-0">
+                        <div className="text-red-400">週日</div>
+                        <div>週一</div>
+                        <div>週二</div>
+                        <div>週三</div>
+                        <div>週四</div>
+                        <div>週五</div>
+                        <div className="text-green-400">週六</div>
+                    </div>
 
-                                    return (
-                                        <div key={m.id} 
-                                            className={`flex flex-col md:flex-row items-start md:items-center bg-white border p-4 md:p-5 rounded-xl shadow-sm transition hover:shadow-md gap-4 fade-in ${isEnded ? 'opacity-70' : ''} ${m.isLocked ? 'border-amber-300 bg-amber-50' : ''}`}
-                                        >
-                                            <div className="flex-shrink-0 w-full md:w-40 border-b md:border-b-0 md:border-r border-gray-200 pb-2 md:pb-0 md:pr-4">
-                                                <div className="text-lg font-black text-slate-700">{formatDate(m.date)}</div>
-                                                <div className="text-sm font-mono text-gray-500 mt-1">{timeDisplay}</div>
-                                            </div>
-                                            
-                                            <div className="flex-grow w-full">
-                                                <h3 className="text-xl font-bold text-slate-800 mb-1">{m.title}</h3>
-                                                <div className="flex flex-wrap gap-2 text-sm text-gray-600">
-                                                    <span className="bg-gray-100 px-2 py-1 rounded"><i className="fas fa-map-marker-alt text-gray-400 mr-1"></i>{m.locationType === 'outside' ? '校外' : '校內'} - {m.location}</span>
-                                                    <span className="bg-gray-100 px-2 py-1 rounded"><i className="fas fa-users text-gray-400 mr-1"></i>{currentRegCount} / {m.maxCapacity} 人</span>
-                                                    {m.isMealProvided && <span className="bg-green-100 text-green-700 px-2 py-1 rounded"><i className="fas fa-utensils mr-1"></i>供餐</span>}
-                                                </div>
-                                            </div>
-
-                                            <div className="flex-shrink-0 w-full md:w-auto mt-2 md:mt-0 text-right">
-                                                <button 
-                                                    onClick={() => onMissionClick(m)}
-                                                    className={`w-full md:w-auto px-6 py-3 rounded-lg font-bold transition flex items-center justify-center gap-2 ${statusConfig.style}`}
-                                                >
-                                                    <i className={`fas ${statusConfig.icon}`}></i>
-                                                    {statusConfig.text}
-                                                </button>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
+                    <div className="grid grid-cols-7 auto-rows-fr flex-grow border-t border-l border-gray-200">
+                        {cells}
+                    </div>
+                    
+                    <div className="p-3 text-xs text-gray-500 flex flex-wrap gap-4 justify-end bg-slate-50 border-t shrink-0">
+                         <span className="flex items-center gap-1"><span className="w-3 h-3 bg-blue-200 block rounded-sm"></span> 報名中</span>
+                         <span className="flex items-center gap-1"><span className="w-3 h-3 bg-red-300 block rounded-sm"></span> 已額滿</span>
+                         <span className="flex items-center gap-1"><span className="w-3 h-3 bg-amber-300 block rounded-sm"></span> 已鎖定</span>
+                         <span className="flex items-center gap-1"><span className="w-3 h-3 bg-gray-300 block rounded-sm"></span> 已結束</span>
                     </div>
                 </div>
             );
@@ -319,7 +382,7 @@
             const [targetReg, setTargetReg] = React.useState(null);
             const [isSubmitting, setIsSubmitting] = React.useState(false); 
 
-            const isEnded = new Date(mission.date) < new Date(new Date().toDateString()) || mission.status === 'ended';
+            const isEnded = new Date(mission.date) < new Date(getLocalTodayString()) || mission.status === 'ended';
             const isFull = registrations.length >= parseInt(mission.maxCapacity);
             const canRegister = !isEnded && !isFull && !mission.isLocked;
             const timeDisplay = formatTimeRange(mission.startTime, mission.endTime, mission.time);
@@ -329,7 +392,7 @@
             const handleRegister = async (e) => {
                 e.preventDefault();
                 if (!form.class || !form.name || !form.password || (mission.isMealProvided && !form.mealPreference)) {
-                    setMsg('請填寫所有必填欄位 (包含供餐口味)');
+                    setMsg('請填寫所有必填欄位 (包含餐點口味)');
                     return;
                 }
 
@@ -371,7 +434,7 @@
                     setMsg('密碼錯誤'); return;
                 }
                 if (mission.isMealProvided && !form.mealPreference && action === 'update') {
-                    setMsg('請填寫餐點需求'); return;
+                    setMsg('請填寫餐點口味'); return;
                 }
 
                 if (action === 'delete') {
@@ -405,8 +468,8 @@
 
             return (
                 <div className="bg-white rounded-lg shadow-lg p-6 max-w-3xl mx-auto fade-in">
-                    <button onClick={onBack} className="text-gray-500 hover:text-gray-700 mb-4 flex items-center">
-                        <i className="fas fa-arrow-left mr-2"></i> 返回列表
+                    <button onClick={onBack} className="text-gray-500 hover:text-blue-600 mb-4 flex items-center transition font-bold">
+                        <i className="fas fa-arrow-left mr-2"></i> 返回月曆
                     </button>
 
                     <div className="border-b pb-4 mb-4">
@@ -415,12 +478,12 @@
                             {mission.isLocked && <span className="bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-sm font-bold"><i className="fas fa-lock mr-1"></i> 已鎖定</span>}
                         </div>
                         <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-600">
-                            <p><i className="far fa-calendar-alt w-5 text-center"></i> {mission.date} {timeDisplay}</p>
+                            <p><i className="far fa-calendar-alt w-5 text-center"></i> {formatDate(mission.date)} {timeDisplay}</p>
                             <p><i className="fas fa-map-marker-alt w-5 text-center"></i> {mission.locationType === 'outside' ? '校外' : '校內'} - <span className="font-bold text-slate-800">{mission.location || '無詳細地點'}</span></p>
                             <p><i className="fas fa-utensils w-5 text-center"></i> {mission.isMealProvided ? `供餐 (${mission.mealInfo || '未特別說明'})` : '不供餐'}</p>
                             <p><i className="fas fa-users w-5 text-center"></i> 需求: {mission.maxCapacity} 人 (目前 {registrations.length} 人)</p>
                         </div>
-                        <div className="mt-4 bg-blue-50/50 p-4 rounded-lg border text-slate-700">
+                        <div className="mt-4 bg-blue-50/50 p-4 rounded-lg border border-blue-100 text-slate-700">
                             <h3 className="font-bold mb-2 flex items-center"><i className="fas fa-info-circle mr-2 text-blue-500"></i>任務內容</h3>
                             <p className="whitespace-pre-wrap leading-relaxed">{mission.content}</p>
                         </div>
@@ -435,15 +498,15 @@
                                     <i className="fas fa-user-plus"></i> 我要報名
                                 </button>
                             ) : (
-                                <div className="text-center py-4 bg-gray-100 text-gray-500 rounded-xl font-bold border">
-                                    {mission.isLocked ? "任務已鎖定，暫停報名" : (isEnded ? "任務已結束" : "已額滿，停止報名")}
+                                <div className="text-center py-4 bg-gray-100 text-gray-500 rounded-xl font-bold border border-gray-200">
+                                    {mission.isLocked ? "任務已鎖定，暫停報名" : (isEnded ? "任務已結束" : "名額已滿，停止報名")}
                                 </div>
                             )}
                         </div>
                     )}
 
                     {(mode === 'register' || mode === 'edit') && (
-                        <div className="bg-slate-50 p-6 rounded-xl border-2 border-blue-100 mb-8 shadow-inner">
+                        <div className="bg-slate-50 p-6 rounded-xl border-2 border-blue-100 mb-8 shadow-inner fade-in">
                             <h3 className="font-bold text-xl mb-4 text-slate-800 border-b pb-2">{mode === 'register' ? '📝 填寫報名資料' : '✏️ 編輯/刪除報名資料'}</h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
@@ -456,8 +519,8 @@
                                 </div>
                                 {mission.isMealProvided && (
                                     <div className="md:col-span-2">
-                                        <label className="block text-sm font-bold text-gray-600 mb-1">餐點需求 <span className="text-red-500">*</span> <span className="font-normal text-xs text-blue-500">(提示: {mission.mealInfo || '有供餐'})</span></label>
-                                        <input type="text" placeholder="請根據提示填寫您的需求 (例如: 葷 / 素 / 不吃牛)" className="p-2.5 border rounded-lg w-full focus:ring-2 focus:ring-blue-300 outline-none" value={form.mealPreference} onChange={e => setForm({...form, mealPreference: e.target.value})} disabled={isSubmitting} />
+                                        <label className="block text-sm font-bold text-gray-600 mb-1">餐點口味 <span className="text-red-500">*</span> <span className="font-normal text-xs text-blue-500">(提示: {mission.mealInfo || '有供餐'})</span></label>
+                                        <input type="text" placeholder="請根據提示填寫您的口味 (例如: 葷 / 素 / 不吃牛)" className="p-2.5 border rounded-lg w-full focus:ring-2 focus:ring-blue-300 outline-none border-blue-200" value={form.mealPreference} onChange={e => setForm({...form, mealPreference: e.target.value})} disabled={isSubmitting} />
                                     </div>
                                 )}
                                 <div className="md:col-span-2">
@@ -494,7 +557,7 @@
                                         <th className="px-4 py-3 w-16 text-center">編號</th>
                                         <th className="px-4 py-3">班級</th>
                                         <th className="px-4 py-3">姓名</th>
-                                        {mission.isMealProvided && <th className="px-4 py-3 hidden md:table-cell">餐點需求</th>}
+                                        {mission.isMealProvided && <th className="px-4 py-3 hidden md:table-cell">餐點口味</th>}
                                         <th className="px-4 py-3 text-right">操作</th>
                                     </tr>
                                 </thead>
@@ -536,19 +599,14 @@
             const [editMission, setEditMission] = React.useState(null); 
             const [mealProvidedChecked, setMealProvidedChecked] = React.useState(false);
 
-            // 當點擊編輯按鈕時，同步更新「是否供餐」的狀態以展開/收合對應輸入框
             React.useEffect(() => {
-                if (editMission) {
-                    setMealProvidedChecked(!!editMission.isMealProvided);
-                } else {
-                    setMealProvidedChecked(false);
-                }
+                if (editMission) setMealProvidedChecked(!!editMission.isMealProvided);
+                else setMealProvidedChecked(false);
             }, [editMission]);
             
             const handleLogin = (e) => {
                 e.preventDefault();
                 setLoginMsg({ type: '', text: '' });
-                // 只需比對密碼即可
                 if (loginPwd === systemSettings.adminPassword) {
                     setLoginMsg({ type: 'success', text: '登入成功！正在跳轉...' });
                     setTimeout(() => setIsLoggedIn(true), 800);
@@ -609,7 +667,7 @@
 
             if (!isLoggedIn) {
                 return (
-                    <div className="flex justify-center items-center py-10">
+                    <div className="flex justify-center items-center py-10 fade-in">
                         <form onSubmit={handleLogin} className="bg-white p-8 rounded-xl shadow-lg w-full max-w-sm border">
                             <h2 className="text-2xl font-black mb-6 text-center text-slate-800">管理員登入</h2>
                             {loginMsg.text && <div className={`mb-4 p-3 text-center rounded-lg text-sm font-bold ${loginMsg.type === 'error' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{loginMsg.text}</div>}
@@ -627,24 +685,24 @@
                         <div className="flex flex-wrap gap-2 w-full md:w-auto">
                             <button onClick={() => setTab('missions')} className={`flex-1 md:flex-none px-5 py-2 rounded-lg font-bold transition ${tab==='missions'?'bg-blue-600 text-white shadow-md':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>任務管理</button>
                             <button onClick={() => setTab('settings')} className={`flex-1 md:flex-none px-5 py-2 rounded-lg font-bold transition ${tab==='settings'?'bg-blue-600 text-white shadow-md':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>系統設定</button>
-                            <button onClick={onLogout} className="px-5 py-2 bg-red-100 text-red-700 font-bold rounded-lg hover:bg-red-200 transition">安全登出</button>
+                            <button onClick={onLogout} className="px-5 py-2 bg-red-100 text-red-700 font-bold rounded-lg hover:bg-red-200 transition shadow-sm">安全登出</button>
                         </div>
                     </div>
 
                     {tab === 'settings' && (
-                         <div className="max-w-md mx-auto mt-10 p-8 bg-slate-50 rounded-xl border">
+                         <div className="max-w-md mx-auto mt-10 p-8 bg-slate-50 rounded-xl border fade-in">
                              <h3 className="text-xl font-bold mb-6 text-slate-800">修改管理員密碼</h3>
                              {settingsMsg.text && <div className={`mb-4 p-3 text-center rounded-lg text-sm font-bold ${settingsMsg.type === 'error' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{settingsMsg.text}</div>}
                              <form onSubmit={(e) => { e.preventDefault(); handleUpdateAdminPwd(e.target.newpwd.value); e.target.newpwd.value = ''; }}>
                                  <label className="block text-sm font-bold text-gray-600 mb-2">新密碼</label>
-                                 <input name="newpwd" type="text" className="w-full border p-3 rounded-lg mb-6 focus:ring-2 outline-none" placeholder="請輸入新密碼" required />
+                                 <input name="newpwd" type="text" className="w-full border p-3 rounded-lg mb-6 focus:ring-2 outline-none border-blue-200" placeholder="請輸入新密碼" required />
                                  <button className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold shadow hover:bg-blue-700 transition">更新密碼</button>
                              </form>
                          </div>
                     )}
 
                     {tab === 'missions' && (
-                        <div>
+                        <div className="fade-in">
                             {missionMsg.text && <div className={`mb-6 p-4 text-center rounded-lg shadow-sm font-bold ${missionMsg.type === 'error' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{missionMsg.text}</div>}
 
                             {/* Edit/Create Form */}
@@ -683,7 +741,7 @@
                                             </select>
                                         </div>
                                         <div className="flex flex-col justify-end">
-                                            <div className="flex items-center h-[46px] px-3 bg-white border rounded-lg cursor-pointer hover:bg-gray-50 transition">
+                                            <div className="flex items-center h-[46px] px-3 bg-white border rounded-lg cursor-pointer hover:bg-gray-50 transition border-blue-200">
                                                 <input id="mealCheckbox" name="isMealProvided" type="checkbox" checked={mealProvidedChecked} onChange={(e) => setMealProvidedChecked(e.target.checked)} className="mr-3 w-5 h-5 cursor-pointer accent-blue-600" />
                                                 <label htmlFor="mealCheckbox" className="font-bold text-gray-700 cursor-pointer select-none flex-grow h-full flex items-center">提供餐點</label>
                                             </div>
@@ -748,7 +806,7 @@
                                                                     <th className="px-4 py-2 w-12 text-center">#</th>
                                                                     <th className="px-4 py-2">班級 / 姓名</th>
                                                                     <th className="px-4 py-2 hidden md:table-cell">編輯密碼</th>
-                                                                    {m.isMealProvided && <th className="px-4 py-2">餐點需求</th>}
+                                                                    {m.isMealProvided && <th className="px-4 py-2">餐點口味</th>}
                                                                     <th className="px-4 py-2 text-right">管理操作</th>
                                                                 </tr>
                                                             </thead>
